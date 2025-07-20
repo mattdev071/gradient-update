@@ -7,12 +7,12 @@ from fiber.logging_utils import get_logger
 from transformers import AutoTokenizer
 
 import core.constants as cst
-from core.models.utility_models import TextDatasetType
+from core.models.utility_models import ChatTemplateDatasetType
 from core.models.utility_models import DpoDatasetType
 from core.models.utility_models import FileFormat
 from core.models.utility_models import GrpoDatasetType
 from core.models.utility_models import InstructTextDatasetType
-from core.models.utility_models import ChatTemplateDatasetType
+from core.models.utility_models import TextDatasetType
 
 
 logger = get_logger(__name__)
@@ -84,7 +84,7 @@ def save_config_toml(config: dict, config_path: str):
 
 
 def _process_grpo_dataset_fields(dataset_type: GrpoDatasetType) -> dict:
-    return {"split": "train"}
+    return {"type": "completion", "split": "train"}
 
 
 def _process_dpo_dataset_fields(dataset_type: DpoDatasetType) -> dict:

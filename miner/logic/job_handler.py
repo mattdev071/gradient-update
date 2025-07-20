@@ -21,14 +21,14 @@ from core.config.config_handler import update_flash_attention
 from core.config.config_handler import update_model_info
 from core.dataset.prepare_diffusion_dataset import prepare_dataset
 from core.docker_utils import stream_logs
+from core.models.utility_models import ChatTemplateDatasetType
 from core.models.utility_models import DiffusionJob
 from core.models.utility_models import DpoDatasetType
-from core.models.utility_models import TextDatasetType
 from core.models.utility_models import FileFormat
 from core.models.utility_models import GrpoDatasetType
 from core.models.utility_models import ImageModelType
 from core.models.utility_models import InstructTextDatasetType
-from core.models.utility_models import ChatTemplateDatasetType
+from core.models.utility_models import TextDatasetType
 from core.models.utility_models import TextJob
 from miner.utils import download_flux_unet
 
@@ -447,11 +447,11 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
         job.job_id,
         job.expected_repo_name,
     )
-    
+
     # Optimize config for H100 multi-GPU training
     if gpu_ids and len(gpu_ids) > 1:
         config = _optimize_config_for_multi_gpu(config, len(gpu_ids), job.model)
-    
+
     save_config(config, config_path)
     logger.info(f"H100-optimized training config for {len(gpu_ids) if gpu_ids else 1} GPUs")
 
@@ -466,13 +466,13 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
         dataset_type=cst.CUSTOM_DATASET_TYPE,
         dataset_filename=os.path.basename(job.dataset) if job.file_format != FileFormat.HF else "",
     ).to_dict()
-    
+
     # Add H100 multi-GPU environment variables
     if gpu_ids:
         docker_env["CUDA_VISIBLE_DEVICES"] = ",".join(map(str, gpu_ids))
         docker_env["NVIDIA_VISIBLE_DEVICES"] = ",".join(map(str, gpu_ids))
         docker_env["NUM_GPUS"] = str(len(gpu_ids))
-        
+
         # H100-specific environment variables
         if len(gpu_ids) >= 4:
             docker_env["CUDA_LAUNCH_BLOCKING"] = "0"
@@ -481,7 +481,7 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
             docker_env["NCCL_DEBUG"] = "INFO"
             docker_env["NCCL_SOCKET_IFNAME"] = "^docker0,lo"
             docker_env["NCCL_ASYNC_ERROR_HANDLING"] = "1"
-    
+
     logger.info(f"Docker environment: {docker_env}")
 
     try:
@@ -531,7 +531,7 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
             "tty": True,
             "command": ["/bin/bash", "-c", docker_entrypoint]
         }
-        
+
         # Optimize for H100 4-GPU setup
         if gpu_ids and len(gpu_ids) >= 4:
             container_kwargs.update({
@@ -566,9 +566,17 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
     finally:
         repo = config.get("hub_model_id", None)
         if repo:
-            hf_api = HfApi(token=cst.HUGGINGFACE_TOKEN)
-            hf_api.update_repo_visibility(repo_id=repo, private=False, token=cst.HUGGINGFACE_TOKEN)
-            logger.info(f"Successfully made repository {repo} public")
+            try:
+                hf_api = HfApi(token=cst.HUGGINGFACE_TOKEN)
+                # Check if repository exists before trying to update it
+                try:
+                    hf_api.model_info(repo_id=repo)
+                    hf_api.update_repo_visibility(repo_id=repo, private=False, token=cst.HUGGINGFACE_TOKEN)
+                    logger.info(f"Successfully made repository {repo} public")
+                except Exception as repo_error:
+                    logger.warning(f"Repository {repo} not found or not accessible: {repo_error}")
+            except Exception as hf_error:
+                logger.warning(f"Failed to update repository visibility: {hf_error}")
 
         if "container" in locals():
             try:
@@ -579,31 +587,31 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
 
 def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str) -> dict:
     """Optimize training configuration for H100 multi-GPU training"""
-    
+
     # Estimate model size
     model_size = _estimate_model_size_from_name(model_name)
-    
+
     # H100-specific optimizations for 4-GPU setup
     if num_gpus >= 4:
         # H100 has 80GB VRAM per GPU, allowing much larger batch sizes
         config["micro_batch_size"] = max(4, config.get("micro_batch_size", 2) * 4)  # 4x increase for H100
         config["gradient_accumulation_steps"] = max(1, config.get("gradient_accumulation_steps", 4) // 4)
-        
+
         # H100 supports higher precision and better memory efficiency
         config["bf16"] = True
         config["fp16"] = False  # Prefer bf16 on H100
         config["tf32"] = True   # Enable TensorFloat-32 for better performance
-        
+
         # Optimize for H100's tensor cores
         config["dataloader_pin_memory"] = True
         config["dataloader_num_workers"] = 8  # More workers for H100
-        
+
     elif num_gpus >= 2:
         config["micro_batch_size"] = max(2, config.get("micro_batch_size", 2) * 2)
         config["gradient_accumulation_steps"] = max(1, config.get("gradient_accumulation_steps", 4) // 2)
         config["bf16"] = True
         config["tf32"] = True
-    
+
     # Enhanced LoRA settings for H100's memory capacity
     if model_size > 70:  # For 70B+ models on H100
         config["lora_r"] = min(512, config.get("lora_r", 8) * 4)  # Much larger LoRA rank
@@ -615,12 +623,12 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
     elif model_size > 13:
         config["lora_r"] = min(128, config.get("lora_r", 8) * 2)
         config["lora_alpha"] = min(256, config.get("lora_alpha", 16) * 2)
-    
+
     # Advanced optimizations for H100
     config["flash_attention"] = True
     config["gradient_checkpointing"] = True
     config["warmup_steps"] = max(100, config.get("warmup_steps", 100))  # More warmup for H100
-    
+
     # Optimize learning rate for H100's capabilities
     base_lr = config.get("learning_rate", 0.0002)
     if num_gpus >= 4:
@@ -630,7 +638,7 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
     elif num_gpus >= 2:
         config["learning_rate"] = base_lr * 1.5
         config["lr_scheduler"] = "cosine"
-    
+
     # Enhanced FSDP for H100
     if model_size > 70 and num_gpus >= 4:
         config["fsdp"] = "full_shard auto_wrap"
@@ -647,16 +655,16 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
             "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
             "fsdp_backward_prefetch": "BACKWARD_PRE",
         }
-    
+
     # H100-specific memory optimizations
     config["max_memory_MB"] = 70000  # 70GB per H100 GPU
     config["gradient_clipping"] = 1.0  # Prevent gradient explosion
     config["max_grad_norm"] = 1.0
-    
+
     # Optimize for H100's tensor cores
     config["use_cpu_offload"] = False  # H100 has enough memory
     config["use_8bit_optimizer"] = False  # Not needed with H100's memory
-    
+
     return config
 
 
@@ -674,4 +682,3 @@ def _estimate_model_size_from_name(model_name: str) -> int:
     elif "3b" in model_name_lower:
         return 3
     return 7  # Default assumption
-
