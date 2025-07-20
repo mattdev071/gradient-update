@@ -108,6 +108,26 @@ def _load_and_modify_config(
     config = update_model_info(config, model, task_id, expected_repo_name)
     config["mlflow_experiment_name"] = dataset
 
+    # H100×4 OPTIMIZATIONS FOR RANK 1 PERFORMANCE
+    config["lora_r"] = 128  # 16x larger LoRA rank
+    config["lora_alpha"] = 256  # 16x larger alpha
+    config["lora_dropout"] = 0.1  # Higher dropout for regularization
+    config["micro_batch_size"] = 8  # 4x larger batch size
+    config["gradient_accumulation_steps"] = 2  # Reduced for larger batches
+    config["num_epochs"] = 3  # 3x more epochs
+    config["learning_rate"] = 0.0004  # 2x higher LR
+    config["lr_scheduler"] = "cosine_with_restarts"  # Better scheduler
+    config["bf16"] = True  # Enable bf16
+    config["fp16"] = False  # Disable fp16
+    config["tf32"] = True  # Enable tf32
+    config["gradient_checkpointing"] = True  # Enable gradient checkpointing
+    config["warmup_steps"] = 100  # 10x more warmup
+    config["weight_decay"] = 0.01  # Add regularization
+    config["early_stopping_patience"] = 3  # Early stopping
+    config["eval_steps"] = 50  # More frequent evaluation
+    config["save_steps"] = 100  # More frequent saving
+    config["logging_steps"] = 10  # More frequent logging
+
     return config
 
 
@@ -148,6 +168,27 @@ def _load_and_modify_config_diffusion(job: DiffusionJob) -> dict:
         config["train_data_dir"] = f"/dataset/images/{job.job_id}/img/"
         config["huggingface_token"] = cst.HUGGINGFACE_TOKEN
         config["huggingface_repo_id"] = f"{cst.HUGGINGFACE_USERNAME}/{job.expected_repo_name or str(uuid.uuid4())}"
+        
+        # H100×4 OPTIMIZATIONS FOR RANK 1 PERFORMANCE
+        config["learning_rate"] = 0.00002  # 2x higher LR
+        config["text_encoder_lr"] = 0.00002
+        config["unet_lr"] = 0.00002
+        config["network_dim"] = 128  # 4x larger LoRA rank
+        config["network_alpha"] = 64  # 4x larger alpha
+        config["train_batch_size"] = 8  # 2x larger batch size
+        config["max_train_steps"] = 2400  # 50% more training
+        config["epoch"] = 15  # 50% more epochs
+        config["min_snr_gamma"] = 8  # Better noise scheduling
+        config["huber_c"] = 0.05  # More stable loss
+        config["lr_scheduler"] = "cosine_with_restarts"
+        config["lr_scheduler_args"] = [3]
+        config["lr_scheduler_num_cycles"] = 3
+        config["max_data_loader_n_workers"] = 8
+        config["max_grad_norm"] = 0.5
+        config["scale_weight_norms"] = 8
+        config["save_every_n_epochs"] = 5
+        config["training_comment"] = "H100-optimized for rank 1 performance"
+        
     elif job.model_type == ImageModelType.FLUX:
         with open(cst.CONFIG_TEMPLATE_PATH_DIFFUSION_FLUX, "r") as file:
             config = toml.load(file)
@@ -155,6 +196,25 @@ def _load_and_modify_config_diffusion(job: DiffusionJob) -> dict:
         config["train_data_dir"] = f"/dataset/images/{job.job_id}/img/"
         config["huggingface_token"] = cst.HUGGINGFACE_TOKEN
         config["huggingface_repo_id"] = f"{cst.HUGGINGFACE_USERNAME}/{job.expected_repo_name or str(uuid.uuid4())}"
+        
+        # H100×4 OPTIMIZATIONS FOR RANK 1 PERFORMANCE
+        config["learning_rate"] = 8e-5  # 60% higher LR
+        config["text_encoder_lr"] = [8e-5, 8e-5]
+        config["unet_lr"] = 8e-5
+        config["network_dim"] = 256  # 2x larger LoRA rank
+        config["network_alpha"] = 256  # 2x larger alpha
+        config["train_batch_size"] = 2  # 2x larger batch size
+        config["vae_batch_size"] = 8  # 2x larger VAE batch
+        config["max_train_steps"] = 4500  # 50% more training
+        config["epoch"] = 150  # 50% more epochs
+        config["huber_c"] = 0.05  # More stable loss
+        config["lr_scheduler"] = "cosine_with_restarts"
+        config["lr_scheduler_args"] = [3]
+        config["lr_scheduler_num_cycles"] = 3
+        config["max_data_loader_n_workers"] = 8
+        config["save_every_n_epochs"] = 15
+        config["training_comment"] = "H100-optimized Flux for rank 1 performance"
+        
     else:
         logger.error(f"Unknown model type: {job.model_type}")
     return config
@@ -586,15 +646,15 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
                 logger.warning(f"Failed to remove container: {e}")
 
 def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str) -> dict:
-    """Optimize training configuration for H100 multi-GPU training"""
+    """Optimize training configuration for H100 multi-GPU training - RANK 1 PERFORMANCE"""
 
     # Estimate model size
     model_size = _estimate_model_size_from_name(model_name)
 
-    # H100-specific optimizations for 4-GPU setup
+    # H100×4 SPECIFIC OPTIMIZATIONS FOR RANK 1
     if num_gpus >= 4:
         # H100 has 80GB VRAM per GPU, allowing much larger batch sizes
-        config["micro_batch_size"] = max(4, config.get("micro_batch_size", 2) * 4)  # 4x increase for H100
+        config["micro_batch_size"] = max(8, config.get("micro_batch_size", 2) * 4)  # 4x increase for H100
         config["gradient_accumulation_steps"] = max(1, config.get("gradient_accumulation_steps", 4) // 4)
 
         # H100 supports higher precision and better memory efficiency
@@ -607,12 +667,12 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
         config["dataloader_num_workers"] = 8  # More workers for H100
 
     elif num_gpus >= 2:
-        config["micro_batch_size"] = max(2, config.get("micro_batch_size", 2) * 2)
+        config["micro_batch_size"] = max(4, config.get("micro_batch_size", 2) * 2)
         config["gradient_accumulation_steps"] = max(1, config.get("gradient_accumulation_steps", 4) // 2)
         config["bf16"] = True
         config["tf32"] = True
 
-    # Enhanced LoRA settings for H100's memory capacity
+    # ENHANCED LoRA SETTINGS FOR RANK 1 PERFORMANCE
     if model_size > 70:  # For 70B+ models on H100
         config["lora_r"] = min(512, config.get("lora_r", 8) * 4)  # Much larger LoRA rank
         config["lora_alpha"] = min(1024, config.get("lora_alpha", 16) * 4)
@@ -623,23 +683,29 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
     elif model_size > 13:
         config["lora_r"] = min(128, config.get("lora_r", 8) * 2)
         config["lora_alpha"] = min(256, config.get("lora_alpha", 16) * 2)
+    else:
+        # For smaller models, still use enhanced settings for H100
+        config["lora_r"] = min(128, config.get("lora_r", 8) * 2)
+        config["lora_alpha"] = min(256, config.get("lora_alpha", 16) * 2)
 
-    # Advanced optimizations for H100
+    # ADVANCED OPTIMIZATIONS FOR RANK 1
     config["flash_attention"] = True
     config["gradient_checkpointing"] = True
     config["warmup_steps"] = max(100, config.get("warmup_steps", 100))  # More warmup for H100
 
-    # Optimize learning rate for H100's capabilities
+    # OPTIMIZE LEARNING RATE FOR RANK 1 PERFORMANCE
     base_lr = config.get("learning_rate", 0.0002)
     if num_gpus >= 4:
         config["learning_rate"] = base_lr * 2.0  # Higher LR for H100
         config["lr_scheduler"] = "cosine_with_restarts"  # Better scheduler for H100
         config["lr_scheduler_kwargs"] = {"num_cycles": 3}  # Multiple cycles for better convergence
+        config["weight_decay"] = 0.01  # Add regularization for rank 1
     elif num_gpus >= 2:
         config["learning_rate"] = base_lr * 1.5
         config["lr_scheduler"] = "cosine"
+        config["weight_decay"] = 0.01
 
-    # Enhanced FSDP for H100
+    # ENHANCED FSDP FOR H100×4
     if model_size > 70 and num_gpus >= 4:
         config["fsdp"] = "full_shard auto_wrap"
         config["fsdp_config"] = {
@@ -656,14 +722,20 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
             "fsdp_backward_prefetch": "BACKWARD_PRE",
         }
 
-    # H100-specific memory optimizations
+    # H100-SPECIFIC MEMORY OPTIMIZATIONS
     config["max_memory_MB"] = 70000  # 70GB per H100 GPU
     config["gradient_clipping"] = 1.0  # Prevent gradient explosion
-    config["max_grad_norm"] = 1.0
+    config["max_grad_norm"] = 0.5  # Tighter gradient clipping for rank 1
 
-    # Optimize for H100's tensor cores
+    # OPTIMIZE FOR H100'S TENSOR CORES
     config["use_cpu_offload"] = False  # H100 has enough memory
     config["use_8bit_optimizer"] = False  # Not needed with H100's memory
+    
+    # ENHANCED TRAINING PARAMETERS FOR RANK 1
+    config["early_stopping_patience"] = 3
+    config["eval_steps"] = 50  # More frequent evaluation
+    config["save_steps"] = 100  # More frequent saving
+    config["logging_steps"] = 10  # More frequent logging
 
     return config
 
