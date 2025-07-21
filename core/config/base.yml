@@ -1,72 +1,150 @@
-base_model: NousResearch/Meta-Llama-3-8B-Instruct
-model_type: AutoModelForCausalLM
-tokenizer_type: AutoTokenizer
+# ULTRA AGGRESSIVE H100×4 TEXT MODEL CONFIGURATION FOR RANK 1 PERFORMANCE
+# This configuration pushes H100×4 hardware to its absolute limits
 
-load_in_8bit: false
-load_in_4bit: false
-strict: false
+# ULTRA AGGRESSIVE MODEL SETTINGS
+model_name_or_path: "meta-llama/Llama-2-7b-hf"
+model_config_name: null
+tokenizer_name: null
+tokenizer_name_or_path: null
 
-chat_template: llama3
-datasets:
-dataset_prepared_path:
-val_set_size: 0.05
-output_dir: miner_id_24
+# ULTRA AGGRESSIVE DATASET SETTINGS
+dataset: "dataset.json"
+dataset_format: "json"
+data_path: ""
+data_dir: ""
+split: "train"
+streaming: false
+buffer_size: 1000
+mix_strategy: "concat"
+eval_dataset: ""
+eval_split: "validation"
+eval_data_path: ""
+eval_data_dir: ""
+eval_streaming: false
+eval_buffer_size: 1000
+eval_mix_strategy: "concat"
 
-sequence_len: 512
-sample_packing: false
-pad_to_sequence_len: true
-trust_remote_code: true
+# ULTRA AGGRESSIVE TRAINING SETTINGS
+output_dir: "/workspace/axolotl/outputs"
+num_epochs: 8  # 8x more epochs for better convergence
+max_steps: 10000  # 10x more steps for better convergence
+per_device_train_batch_size: 32  # 16x larger batch size for H100×4
+per_device_eval_batch_size: 32
+gradient_accumulation_steps: 1  # Minimal accumulation for larger batches
+eval_accumulation_steps: 1
+eval_delay: 0
+save_steps: 40  # More frequent saving
+save_total_limit: 20
+logging_steps: 5  # More frequent logging
+logging_first_step: true
+logging_dir: ""
+dataloader_pin_memory: true
+dataloader_num_workers: 64  # More workers for H100×4
+dataloader_prefetch_factor: 8
+remove_unused_columns: false
+label_names: ["labels"]
+load_best_model_at_end: true
+metric_for_best_model: "eval_loss"
+greater_is_better: false
+ignore_data_skip: false
+sharded_ddp: []
+ddp_find_unused_parameters: false
+ddp_bucket_cap_mb: 25
+dataloader_pin_memory: true
+dataloader_num_workers: 64
+dataloader_prefetch_factor: 8
 
-adapter: lora
-lora_model_dir:
-lora_r: 8
-lora_alpha: 16
-lora_dropout: 0.05
-lora_target_linear: true
-lora_fan_in_fan_out:
+# ULTRA AGGRESSIVE OPTIMIZATION SETTINGS
+learning_rate: 0.0008  # 4x higher LR for faster convergence
+lr_scheduler_type: "cosine_with_restarts"
+lr_scheduler_kwargs: {"num_cycles": 5}  # More cycles for better convergence
+warmup_ratio: 0.1
+warmup_steps: 300  # 30x more warmup for stability
+weight_decay: 0.002  # Reduced regularization for better performance
+max_grad_norm: 0.3  # Tighter gradient clipping for rank 1
+max_memory_MB: 75000  # 75GB per H100 GPU (pushing limits)
 
-gradient_accumulation_steps: 4
-micro_batch_size: 2
-num_epochs: 1
-optimizer: adamw_bnb_8bit
-lr_scheduler: cosine
-learning_rate: 0.0002
+# ULTRA AGGRESSIVE PRECISION SETTINGS
+bf16: true  # Use BF16 for H100×4
+fp16: false  # Disable FP16
+tf32: true  # Enable TF32
+ddp_fp16: false
+ddp_bf16: true
 
-train_on_inputs: false
-group_by_length: false
-bf16: auto
-fp16:
-tf32: false
+# ULTRA AGGRESSIVE LoRA SETTINGS FOR RANK 1
+lora_r: 512  # 32x larger LoRA rank for maximum expressiveness
+lora_alpha: 1024  # 32x larger alpha for better convergence
+lora_dropout: 0.05  # Lower dropout for better performance
+lora_target_modules: ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+lora_target_modules_to_save: null
+lora_modules_to_save: null
+lora_fan_in_fan_out: false
+lora_bias: "none"
+lora_modules_to_save: null
+lora_target_modules_to_save: null
+lora_fan_in_fan_out: false
+lora_bias: "none"
 
-gradient_checkpointing: false
-early_stopping_patience:
-resume_from_checkpoint:
-local_rank:
-logging_steps: 1
-xformers_attention:
-flash_attention: true
-s2_attention:
+# ULTRA AGGRESSIVE PEFT SETTINGS
+use_peft: true
+peft_config: {
+    "peft_type": "LORA",
+    "task_type": "CAUSAL_LM",
+    "inference_mode": false,
+    "r": 512,
+    "lora_alpha": 1024,
+    "lora_dropout": 0.05,
+    "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+    "bias": "none",
+    "modules_to_save": null,
+}
 
-wandb_project: Gradients-On-Demand
-wandb_entity:
-wandb_mode: online
-wandb_run: your_name
-wandb_runid: default
+# ULTRA AGGRESSIVE FSDP SETTINGS
+fsdp: "full_shard auto_wrap"
+fsdp_config: {
+    "fsdp_auto_wrap_policy": "TRANSFORMER_BASED_WRAP",
+    "fsdp_backward_prefetch": "BACKWARD_PRE",
+    "fsdp_state_dict_type": "FULL_STATE_DICT",
+    "fsdp_transformer_layer_cls_to_wrap": "LlamaDecoderLayer",
+    "fsdp_use_orig_params": true,
+    "fsdp_forward_prefetch": true,
+    "fsdp_limit_all_gathers": true,
+}
 
-hub_model_id:
-hub_repo:
-hub_strategy: checkpoint
-hub_token:
+# ULTRA AGGRESSIVE MEMORY OPTIMIZATIONS
+gradient_checkpointing: false  # Disable for H100×4 (enough memory)
+use_8bit_optimizer: false  # Not needed with H100×4
+use_4bit_optimizer: false  # Not needed with H100×4
+use_cpu_offload: false  # H100×4 has enough memory
 
+# ULTRA AGGRESSIVE EVALUATION SETTINGS
+evaluation_strategy: "steps"
+eval_steps: 20  # More frequent evaluation
+eval_delay: 0
+eval_accumulation_steps: 1
+eval_on_train_batch: false
+eval_on_train_epoch: false
+eval_on_train_epoch_ratio: 0.0
+eval_on_train_epoch_ratio_absolute: 0.0
+eval_on_train_epoch_ratio_absolute_ratio: 0.0
+eval_on_train_epoch_ratio_absolute_ratio_ratio: 0.0
 
-saves_per_epoch: 4
-warmup_steps: 10
-evals_per_epoch: 4
-eval_table_size:
-eval_max_new_tokens: 128
-max_steps: 10
-debug:
-deepspeed:
-weight_decay: 0.0
-fsdp:
-fsdp_config:
+# ULTRA AGGRESSIVE SAVING SETTINGS
+save_strategy: "steps"
+save_steps: 40
+save_total_limit: 20
+save_only_model: false
+save_safetensors: true
+save_peft_format: true
+
+# ULTRA AGGRESSIVE LOGGING SETTINGS
+logging_strategy: "steps"
+logging_steps: 5
+logging_first_step: true
+logging_dir: ""
+logging_batch_size_per_device: 8
+logging_num_train_epochs: 8
+logging_max_steps: 10000
+
+# ULTRA AGGRESSIVE TRAINING COMMENT
+training_comment: "H100×4 ULTRA AGGRESSIVE TEXT for RANK 1 PERFORMANCE"

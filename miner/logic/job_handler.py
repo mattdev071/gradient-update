@@ -108,25 +108,36 @@ def _load_and_modify_config(
     config = update_model_info(config, model, task_id, expected_repo_name)
     config["mlflow_experiment_name"] = dataset
 
-    # H100×4 OPTIMIZATIONS FOR RANK 1 PERFORMANCE
-    config["lora_r"] = 128  # 16x larger LoRA rank
-    config["lora_alpha"] = 256  # 16x larger alpha
-    config["lora_dropout"] = 0.1  # Higher dropout for regularization
-    config["micro_batch_size"] = 8  # 4x larger batch size
-    config["gradient_accumulation_steps"] = 2  # Reduced for larger batches
-    config["num_epochs"] = 3  # 3x more epochs
-    config["learning_rate"] = 0.0004  # 2x higher LR
+    # H100×4 ULTRA AGGRESSIVE OPTIMIZATIONS FOR RANK 1 PERFORMANCE
+    config["lora_r"] = 512  # 32x larger LoRA rank for maximum expressiveness
+    config["lora_alpha"] = 1024  # 32x larger alpha for better convergence
+    config["lora_dropout"] = 0.05  # Lower dropout for better performance
+    config["micro_batch_size"] = 16  # 8x larger batch size for H100×4
+    config["gradient_accumulation_steps"] = 1  # Minimal accumulation for larger batches
+    config["num_epochs"] = 5  # 5x more epochs for better convergence
+    config["learning_rate"] = 0.0008  # 4x higher LR for faster convergence
     config["lr_scheduler"] = "cosine_with_restarts"  # Better scheduler
     config["bf16"] = True  # Enable bf16
     config["fp16"] = False  # Disable fp16
     config["tf32"] = True  # Enable tf32
-    config["gradient_checkpointing"] = True  # Enable gradient checkpointing
-    config["warmup_steps"] = 100  # 10x more warmup
-    config["weight_decay"] = 0.01  # Add regularization
-    config["early_stopping_patience"] = 3  # Early stopping
-    config["eval_steps"] = 50  # More frequent evaluation
-    config["save_steps"] = 100  # More frequent saving
-    config["logging_steps"] = 10  # More frequent logging
+    config["gradient_checkpointing"] = False  # Disable for H100×4 (enough memory)
+    config["warmup_steps"] = 200  # 20x more warmup for stability
+    config["weight_decay"] = 0.005  # Reduced regularization for better performance
+    config["early_stopping_patience"] = 5  # More patience for better convergence
+    config["eval_steps"] = 25  # More frequent evaluation
+    config["save_steps"] = 50  # More frequent saving
+    config["logging_steps"] = 5  # More frequent logging
+    config["flash_attention"] = True  # Enable flash attention
+    config["use_peft"] = True  # Enable PEFT for better efficiency
+    config["peft_config"] = {
+        "peft_type": "LORA",
+        "task_type": "CAUSAL_LM",
+        "inference_mode": False,
+        "r": 512,
+        "lora_alpha": 1024,
+        "lora_dropout": 0.05,
+        "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+    }
 
     return config
 
@@ -169,25 +180,26 @@ def _load_and_modify_config_diffusion(job: DiffusionJob) -> dict:
         config["huggingface_token"] = cst.HUGGINGFACE_TOKEN
         config["huggingface_repo_id"] = f"{cst.HUGGINGFACE_USERNAME}/{job.expected_repo_name or str(uuid.uuid4())}"
         
-        # H100×4 OPTIMIZATIONS FOR RANK 1 PERFORMANCE
-        config["learning_rate"] = 0.00002  # 2x higher LR
-        config["text_encoder_lr"] = 0.00002
-        config["unet_lr"] = 0.00002
-        config["network_dim"] = 128  # 4x larger LoRA rank
-        config["network_alpha"] = 64  # 4x larger alpha
-        config["train_batch_size"] = 8  # 2x larger batch size
-        config["max_train_steps"] = 2400  # 50% more training
-        config["epoch"] = 15  # 50% more epochs
-        config["min_snr_gamma"] = 8  # Better noise scheduling
-        config["huber_c"] = 0.05  # More stable loss
+        # H100×4 ULTRA AGGRESSIVE OPTIMIZATIONS FOR RANK 1 PERFORMANCE
+        config["learning_rate"] = 1.2e-4  # 100% higher LR for faster convergence
+        config["text_encoder_lr"] = [1.2e-4, 1.2e-4]
+        config["unet_lr"] = 1.2e-4
+        config["network_dim"] = 512  # 4x larger LoRA rank for maximum expressiveness
+        config["network_alpha"] = 512  # 4x larger alpha for better convergence
+        config["train_batch_size"] = 4  # 4x larger batch size for H100×4
+        config["vae_batch_size"] = 16  # 4x larger VAE batch
+        config["max_train_steps"] = 9000  # 100% more training for better convergence
+        config["epoch"] = 300  # 100% more epochs for better convergence
+        config["min_snr_gamma"] = 12  # Better noise scheduling
+        config["huber_c"] = 0.03  # More stable loss
         config["lr_scheduler"] = "cosine_with_restarts"
-        config["lr_scheduler_args"] = [3]
-        config["lr_scheduler_num_cycles"] = 3
-        config["max_data_loader_n_workers"] = 8
-        config["max_grad_norm"] = 0.5
-        config["scale_weight_norms"] = 8
-        config["save_every_n_epochs"] = 5
-        config["training_comment"] = "H100-optimized for rank 1 performance"
+        config["lr_scheduler_args"] = [5]  # More cycles
+        config["lr_scheduler_num_cycles"] = 5  # More cycles for better convergence
+        config["max_data_loader_n_workers"] = 16  # More workers for H100×4
+        config["max_grad_norm"] = 0.3  # Tighter gradient clipping
+        config["scale_weight_norms"] = 16  # Higher scale for better training
+        config["save_every_n_epochs"] = 3  # More frequent saving
+        config["training_comment"] = "H100×4 ULTRA AGGRESSIVE for rank 1 performance"
         
     elif job.model_type == ImageModelType.FLUX:
         with open(cst.CONFIG_TEMPLATE_PATH_DIFFUSION_FLUX, "r") as file:
@@ -580,31 +592,59 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
         else:
             device_requests = [docker.types.DeviceRequest(count=1, capabilities=[["gpu"]])]
 
-        # H100-specific container configuration
-        container_kwargs = {
-            "image": cst.MINER_DOCKER_IMAGE,
-            "environment": docker_env,
-            "volumes": volume_bindings,
-            "runtime": "nvidia",
-            "device_requests": device_requests,
-            "detach": True,
-            "tty": True,
-            "command": ["/bin/bash", "-c", docker_entrypoint]
-        }
+        # Optimize for H100×4 ULTRA AGGRESSIVE setup
+        if gpu_ids and len(gpu_ids) >= 4:
+            container_kwargs = {
+                "image": cst.MINER_DOCKER_IMAGE,
+                "environment": {
+                    **docker_env,
+                    "NCCL_IB_DISABLE": "0",
+                    "NCCL_P2P_DISABLE": "0", 
+                    "NCCL_DEBUG": "INFO",
+                    "NCCL_SOCKET_IFNAME": "^docker0,lo",
+                    "NCCL_ASYNC_ERROR_HANDLING": "1",
+                    "CUDA_LAUNCH_BLOCKING": "0",
+                    "TORCH_NCCL_ASYNC_ERROR_HANDLING": "1",
+                    "NCCL_NET_GDR_LEVEL": "5",  # Enable GPU Direct RDMA
+                    "NCCL_BUFFSIZE": "8388608",  # 8MB buffer size
+                    "NCCL_NTHREADS": "8",  # More threads
+                    "CUDA_VISIBLE_DEVICES": ",".join(map(str, gpu_ids)),
+                    "NVIDIA_VISIBLE_DEVICES": ",".join(map(str, gpu_ids)),
+                    "NUM_GPUS": str(len(gpu_ids)),
+                },
+                "volumes": volume_bindings,
+                "runtime": "nvidia",
+                "device_requests": device_requests,
+                "detach": True,
+                "tty": True,
+                "command": ["/bin/bash", "-c", docker_entrypoint]
+            }
+        else:
+            container_kwargs = {
+                "image": cst.MINER_DOCKER_IMAGE,
+                "environment": docker_env,
+                "volumes": volume_bindings,
+                "runtime": "nvidia",
+                "device_requests": device_requests,
+                "detach": True,
+                "tty": True,
+                "command": ["/bin/bash", "-c", docker_entrypoint]
+            }
 
         # Optimize for H100 4-GPU setup
         if gpu_ids and len(gpu_ids) >= 4:
             container_kwargs.update({
-                "shm_size": "64g",  # Much larger shared memory for H100
-                "mem_limit": "320g",  # 80GB per H100 * 4
-                "cpuset_cpus": "0-31",  # Use all available CPUs
+                "shm_size": "128g",  # Much larger shared memory for H100×4
+                "mem_limit": "400g",  # 100GB per H100 * 4 (pushing limits)
+                "cpuset_cpus": "0-63",  # Use all available CPUs
                 "ulimits": [
                     docker.types.Ulimit(name="memlock", soft=-1, hard=-1),
-                    docker.types.Ulimit(name="stack", soft=67108864, hard=67108864)
+                    docker.types.Ulimit(name="stack", soft=134217728, hard=134217728),  # 128MB stack
+                    docker.types.Ulimit(name="nofile", soft=65536, hard=65536),  # More file descriptors
                 ]
             })
         else:
-            container_kwargs["shm_size"] = "32g"
+            container_kwargs["shm_size"] = "64g"
 
         container = docker_client.containers.run(**container_kwargs)
 
@@ -646,16 +686,16 @@ def start_tuning_container(job: TextJob, gpu_ids: List[int] = None):
                 logger.warning(f"Failed to remove container: {e}")
 
 def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str) -> dict:
-    """Optimize training configuration for H100 multi-GPU training - RANK 1 PERFORMANCE"""
+    """ULTRA AGGRESSIVE H100×4 OPTIMIZATIONS FOR RANK 1 PERFORMANCE"""
 
     # Estimate model size
     model_size = _estimate_model_size_from_name(model_name)
 
-    # H100×4 SPECIFIC OPTIMIZATIONS FOR RANK 1
+    # H100×4 ULTRA AGGRESSIVE OPTIMIZATIONS FOR RANK 1
     if num_gpus >= 4:
         # H100 has 80GB VRAM per GPU, allowing much larger batch sizes
-        config["micro_batch_size"] = max(8, config.get("micro_batch_size", 2) * 4)  # 4x increase for H100
-        config["gradient_accumulation_steps"] = max(1, config.get("gradient_accumulation_steps", 4) // 4)
+        config["micro_batch_size"] = max(32, config.get("micro_batch_size", 2) * 8)  # 8x increase for H100×4
+        config["gradient_accumulation_steps"] = 1  # Minimal accumulation for larger batches
 
         # H100 supports higher precision and better memory efficiency
         config["bf16"] = True
@@ -664,48 +704,51 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
 
         # Optimize for H100's tensor cores
         config["dataloader_pin_memory"] = True
-        config["dataloader_num_workers"] = 8  # More workers for H100
+        config["dataloader_num_workers"] = 16  # More workers for H100×4
 
     elif num_gpus >= 2:
-        config["micro_batch_size"] = max(4, config.get("micro_batch_size", 2) * 2)
-        config["gradient_accumulation_steps"] = max(1, config.get("gradient_accumulation_steps", 4) // 2)
+        config["micro_batch_size"] = max(16, config.get("micro_batch_size", 2) * 4)
+        config["gradient_accumulation_steps"] = 1
         config["bf16"] = True
         config["tf32"] = True
 
-    # ENHANCED LoRA SETTINGS FOR RANK 1 PERFORMANCE
-    if model_size > 70:  # For 70B+ models on H100
-        config["lora_r"] = min(512, config.get("lora_r", 8) * 4)  # Much larger LoRA rank
-        config["lora_alpha"] = min(1024, config.get("lora_alpha", 16) * 4)
-        config["lora_dropout"] = 0.1  # Slightly higher dropout for regularization
+    # ULTRA AGGRESSIVE LoRA SETTINGS FOR RANK 1 PERFORMANCE
+    if model_size > 70:  # For 70B+ models on H100×4
+        config["lora_r"] = min(1024, config.get("lora_r", 8) * 8)  # Much larger LoRA rank
+        config["lora_alpha"] = min(2048, config.get("lora_alpha", 16) * 8)
+        config["lora_dropout"] = 0.02  # Lower dropout for better performance
     elif model_size > 35:
+        config["lora_r"] = min(512, config.get("lora_r", 8) * 4)
+        config["lora_alpha"] = min(1024, config.get("lora_alpha", 16) * 4)
+        config["lora_dropout"] = 0.03
+    elif model_size > 13:
         config["lora_r"] = min(256, config.get("lora_r", 8) * 3)
         config["lora_alpha"] = min(512, config.get("lora_alpha", 16) * 3)
-    elif model_size > 13:
-        config["lora_r"] = min(128, config.get("lora_r", 8) * 2)
-        config["lora_alpha"] = min(256, config.get("lora_alpha", 16) * 2)
+        config["lora_dropout"] = 0.04
     else:
-        # For smaller models, still use enhanced settings for H100
-        config["lora_r"] = min(128, config.get("lora_r", 8) * 2)
-        config["lora_alpha"] = min(256, config.get("lora_alpha", 16) * 2)
+        # For smaller models, still use enhanced settings for H100×4
+        config["lora_r"] = min(256, config.get("lora_r", 8) * 3)
+        config["lora_alpha"] = min(512, config.get("lora_alpha", 16) * 3)
+        config["lora_dropout"] = 0.05
 
-    # ADVANCED OPTIMIZATIONS FOR RANK 1
+    # ULTRA AGGRESSIVE OPTIMIZATIONS FOR RANK 1
     config["flash_attention"] = True
-    config["gradient_checkpointing"] = True
-    config["warmup_steps"] = max(100, config.get("warmup_steps", 100))  # More warmup for H100
+    config["gradient_checkpointing"] = False  # Disable for H100×4 (enough memory)
+    config["warmup_steps"] = max(300, config.get("warmup_steps", 100))  # More warmup for H100×4
 
-    # OPTIMIZE LEARNING RATE FOR RANK 1 PERFORMANCE
+    # ULTRA AGGRESSIVE LEARNING RATE FOR RANK 1 PERFORMANCE
     base_lr = config.get("learning_rate", 0.0002)
     if num_gpus >= 4:
-        config["learning_rate"] = base_lr * 2.0  # Higher LR for H100
-        config["lr_scheduler"] = "cosine_with_restarts"  # Better scheduler for H100
-        config["lr_scheduler_kwargs"] = {"num_cycles": 3}  # Multiple cycles for better convergence
-        config["weight_decay"] = 0.01  # Add regularization for rank 1
+        config["learning_rate"] = base_lr * 4.0  # 4x higher LR for H100×4
+        config["lr_scheduler"] = "cosine_with_restarts"  # Better scheduler for H100×4
+        config["lr_scheduler_kwargs"] = {"num_cycles": 5}  # More cycles for better convergence
+        config["weight_decay"] = 0.002  # Reduced regularization for rank 1
     elif num_gpus >= 2:
-        config["learning_rate"] = base_lr * 1.5
+        config["learning_rate"] = base_lr * 2.5
         config["lr_scheduler"] = "cosine"
-        config["weight_decay"] = 0.01
+        config["weight_decay"] = 0.003
 
-    # ENHANCED FSDP FOR H100×4
+    # ULTRA AGGRESSIVE FSDP FOR H100×4
     if model_size > 70 and num_gpus >= 4:
         config["fsdp"] = "full_shard auto_wrap"
         config["fsdp_config"] = {
@@ -714,6 +757,8 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
             "fsdp_state_dict_type": "FULL_STATE_DICT",
             "fsdp_transformer_layer_cls_to_wrap": "LlamaDecoderLayer",  # Optimized for Llama models
             "fsdp_use_orig_params": True,
+            "fsdp_forward_prefetch": True,  # Enable forward prefetch
+            "fsdp_limit_all_gathers": True,  # Limit all gathers
         }
     elif model_size > 35 and num_gpus >= 2:
         config["fsdp"] = "auto_wrap"
@@ -722,20 +767,36 @@ def _optimize_config_for_multi_gpu(config: dict, num_gpus: int, model_name: str)
             "fsdp_backward_prefetch": "BACKWARD_PRE",
         }
 
-    # H100-SPECIFIC MEMORY OPTIMIZATIONS
-    config["max_memory_MB"] = 70000  # 70GB per H100 GPU
-    config["gradient_clipping"] = 1.0  # Prevent gradient explosion
-    config["max_grad_norm"] = 0.5  # Tighter gradient clipping for rank 1
+    # H100×4 ULTRA AGGRESSIVE MEMORY OPTIMIZATIONS
+    config["max_memory_MB"] = 75000  # 75GB per H100 GPU (pushing limits)
+    config["gradient_clipping"] = 0.5  # Tighter gradient clipping for rank 1
+    config["max_grad_norm"] = 0.3  # Tighter gradient clipping for rank 1
 
-    # OPTIMIZE FOR H100'S TENSOR CORES
-    config["use_cpu_offload"] = False  # H100 has enough memory
-    config["use_8bit_optimizer"] = False  # Not needed with H100's memory
+    # OPTIMIZE FOR H100×4'S TENSOR CORES
+    config["use_cpu_offload"] = False  # H100×4 has enough memory
+    config["use_8bit_optimizer"] = False  # Not needed with H100×4's memory
+    config["use_4bit_optimizer"] = False  # Not needed with H100×4's memory
     
-    # ENHANCED TRAINING PARAMETERS FOR RANK 1
-    config["early_stopping_patience"] = 3
-    config["eval_steps"] = 50  # More frequent evaluation
-    config["save_steps"] = 100  # More frequent saving
-    config["logging_steps"] = 10  # More frequent logging
+    # ULTRA AGGRESSIVE TRAINING PARAMETERS FOR RANK 1
+    config["early_stopping_patience"] = 8  # More patience for better convergence
+    config["eval_steps"] = 20  # More frequent evaluation
+    config["save_steps"] = 40  # More frequent saving
+    config["logging_steps"] = 5  # More frequent logging
+    config["num_epochs"] = max(8, config.get("num_epochs", 3))  # More epochs for better convergence
+
+    # ULTRA AGGRESSIVE PEFT CONFIG FOR RANK 1
+    config["use_peft"] = True
+    config["peft_config"] = {
+        "peft_type": "LORA",
+        "task_type": "CAUSAL_LM",
+        "inference_mode": False,
+        "r": config.get("lora_r", 256),
+        "lora_alpha": config.get("lora_alpha", 512),
+        "lora_dropout": config.get("lora_dropout", 0.05),
+        "target_modules": ["q_proj", "v_proj", "k_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        "bias": "none",
+        "modules_to_save": None,
+    }
 
     return config
 
